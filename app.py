@@ -1,10 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from ddgs import DDGS
 import re
 
-app = FastAPI()
+app = FastAPI(title="Company Finder API")
 
 # =========================
 # CORS
@@ -35,28 +35,22 @@ BAD_WORDS = [
     "companies in", "list of", "how to"
 ]
 
-
 def is_bad_title(text: str) -> bool:
     low = text.lower()
     return any(b in low for b in BAD_WORDS)
-
 
 def extract_name(title: str):
     if not title:
         return None
 
-    # couper les titres inutiles
-    name = title.split("-")[0].split("|")[0].strip()
-
-    # filtre longueur
-    if len(name) < 2:
-        return None
+    # couper sur LinkedIn
+    name = title.split("|")[0].split("-")[0].strip()
 
     # supprimer caractères spéciaux
     name = re.sub(r"[^\w\s&.,'-]", "", name).strip()
 
-    # filtrer junk
-    if is_bad_title(name):
+    # filtre longueur et junk
+    if len(name) < 2 or is_bad_title(name):
         return None
 
     return name
@@ -72,9 +66,14 @@ def search_companies(query: str, limit: int):
         data = ddgs.text(query, max_results=limit * 5)
 
         for r in data:
+            url = r.get("href", "")
             title = r.get("title", "")
-            name = extract_name(title)
 
+            # filtrer uniquement LinkedIn company pages
+            if "linkedin.com/company" not in url.lower():
+                continue
+
+            name = extract_name(title)
             if name:
                 results.append(name)
 
@@ -85,21 +84,20 @@ def search_companies(query: str, limit: int):
 
 
 # =========================
-# API ROUTE
+# API ROUTES
 # =========================
 @app.get("/")
 def home():
     return {"message": "Company Finder API Running 🚀"}
 
-
 @app.post("/find-companies")
 def find_companies(data: RequestData):
 
     queries = [
-        f"{data.domain} companies in {data.country}",
-        f"{data.domain} entreprises {data.country}",
-        f"{data.domain} firms {data.country}",
-        f"{data.country} {data.domain} companies"
+        f"site:linkedin.com/company {data.domain} {data.country}",
+        f"site:linkedin.com/company {data.domain} entreprises {data.country}",
+        f"site:linkedin.com/company {data.domain} firms {data.country}",
+        f"site:linkedin.com/company {data.country} {data.domain} companies"
     ]
 
     seen = set()
@@ -123,7 +121,7 @@ def find_companies(data: RequestData):
                 break
 
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
     return {
         "domain": data.domain,
